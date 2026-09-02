@@ -1,0 +1,6 @@
+{
+  "name": "Metro Cleaners & Renovators Ltd",
+  "description": "Professional cleaning, renovation, fumigation, and sanitary bin services in Nairobi, Kenya. We clean so you don't have to.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
