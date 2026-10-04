@@ -1,6 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Send, Phone, MessageSquare, CheckCircle, Clock, MapPin, Sparkles, Mail, User, ShieldCheck } from 'lucide-react';
+import { Send, Phone, MessageSquare, CheckCircle, Clock, MapPin, Sparkles, Mail, User, ShieldCheck, AlertTriangle, Loader2 } from 'lucide-react';
 import { COMPANY_DETAILS, SERVICES } from '../data/content';
+
+const WEB3FORMS_ENDPOINT = 'https://api.web3forms.com/submit';
+// Web3Forms access keys are designed to be public; set VITE_WEB3FORMS_ACCESS_KEY at build time.
+const WEB3FORMS_ACCESS_KEY = import.meta.env.VITE_WEB3FORMS_ACCESS_KEY as string | undefined;
 
 interface LeadCaptureFormProps {
   initialService?: string;
@@ -24,8 +28,11 @@ export const LeadCaptureForm: React.FC<LeadCaptureFormProps> = ({
     message: initialNotes
   });
 
-  const [isSubmitted, setIsSubmitted] = useState(false);
+  // idle -> sending -> sent | failed. 'mailto' is used when no form service key is configured.
+  const [status, setStatus] = useState<'idle' | 'sending' | 'sent' | 'failed' | 'mailto'>('idle');
   const [generatedMailto, setGeneratedMailto] = useState('');
+  // Honeypot field: real visitors never see or fill it
+  const [botcheck, setBotcheck] = useState(false);
 
   useEffect(() => {
     if (initialService) {
@@ -50,8 +57,9 @@ export const LeadCaptureForm: React.FC<LeadCaptureFormProps> = ({
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (status === 'sending') return;
 
     // Construct the structured email body with user's inputs
     const emailSubject = `New Inquiry: ${formData.serviceRequired} - ${formData.fullName.trim() || 'Website Customer'}`;
@@ -78,14 +86,45 @@ export const LeadCaptureForm: React.FC<LeadCaptureFormProps> = ({
       `${formData.fullName}`
     ].join('\n');
 
-    // Dynamic mailto link creation pre-configured to send to info@metrocleaners.co.ke
+    // Mailto link kept as a fallback, pre-configured to send to info@metrocleaners.co.ke
     const mailtoUrl = `mailto:${COMPANY_DETAILS.email}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
-    
     setGeneratedMailto(mailtoUrl);
-    setIsSubmitted(true);
 
-    // Trigger the mail client directly
-    window.location.href = mailtoUrl;
+    // Without a Web3Forms key (e.g. local dev), fall back to opening the visitor's email app
+    if (!WEB3FORMS_ACCESS_KEY) {
+      setStatus('mailto');
+      window.location.href = mailtoUrl;
+      return;
+    }
+
+    setStatus('sending');
+    try {
+      const res = await fetch(WEB3FORMS_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          access_key: WEB3FORMS_ACCESS_KEY,
+          subject: emailSubject,
+          from_name: 'Metro Cleaners Website',
+          ...(formData.email ? { replyto: formData.email } : {}),
+          name: formData.fullName,
+          phone: formData.phone,
+          email: formData.email || 'Not provided',
+          location: formData.location,
+          service: formData.serviceRequired,
+          property_type: formData.propertyType,
+          preferred_date: formData.preferredDate || 'As soon as possible',
+          message: formData.message || 'No additional details specified.',
+          botcheck: botcheck
+        })
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.success) throw new Error(data?.message || `HTTP ${res.status}`);
+      setStatus('sent');
+    } catch (err) {
+      console.error('Quote form submission failed:', err);
+      setStatus('failed');
+    }
   };
 
   const handleWhatsAppSend = () => {
@@ -193,7 +232,7 @@ export const LeadCaptureForm: React.FC<LeadCaptureFormProps> = ({
                   Request a Free Estimate
                 </h3>
                 <p className="text-slate-600 text-sm mt-1">
-                  Submit the details below to launch your pre-populated email quote or WhatsApp confirmation.
+                  Submit the details below and our team will get back to you with a free quote.
                 </p>
               </div>
 
@@ -335,53 +374,116 @@ export const LeadCaptureForm: React.FC<LeadCaptureFormProps> = ({
                   />
                 </div>
 
+                {/* Honeypot spam trap (hidden from people) */}
+                <input
+                  type="checkbox"
+                  name="botcheck"
+                  checked={botcheck}
+                  onChange={(e) => setBotcheck(e.target.checked)}
+                  className="hidden"
+                  tabIndex={-1}
+                  autoComplete="off"
+                  aria-hidden="true"
+                />
+
                 {/* Submit Button */}
                 <button
                   id="submit-quote-btn"
                   type="submit"
-                  className="w-full py-4 px-6 rounded-xl bg-gradient-to-r from-[#0047BA] via-[#0284C7] to-[#0284C7] hover:from-[#003B95] hover:to-[#0369A1] text-white font-extrabold text-base shadow-lg shadow-blue-500/30 transition-all duration-200 hover:-translate-y-0.5 flex items-center justify-center gap-2.5 cursor-pointer"
+                  disabled={status === 'sending'}
+                  className="w-full py-4 px-6 rounded-xl bg-gradient-to-r from-[#0047BA] via-[#0284C7] to-[#0284C7] hover:from-[#003B95] hover:to-[#0369A1] text-white font-extrabold text-base shadow-lg shadow-blue-500/30 transition-all duration-200 hover:-translate-y-0.5 flex items-center justify-center gap-2.5 cursor-pointer disabled:opacity-70 disabled:cursor-wait disabled:hover:translate-y-0"
                 >
-                  <Send className="w-5 h-5" />
-                  <span>Submit Inquiry (Opens Email Client)</span>
+                  {status === 'sending' ? (
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                  ) : (
+                    <Send className="w-5 h-5" />
+                  )}
+                  <span>
+                    {status === 'sending'
+                      ? 'Sending...'
+                      : WEB3FORMS_ACCESS_KEY
+                        ? 'Request My Free Quote'
+                        : 'Submit Inquiry (Opens Email Client)'}
+                  </span>
                 </button>
 
               </form>
 
-              {/* Dynamic Mailto Post-Submit Notification Banner */}
-              {isSubmitted && (
-                <div className="mt-6 p-4 rounded-2xl bg-blue-50 border border-blue-200 text-slate-800 text-xs sm:text-sm space-y-3 animate-in fade-in duration-300">
-                  <div className="flex items-start gap-2.5">
-                    <CheckCircle className="w-5 h-5 text-lime-600 shrink-0 mt-0.5" />
-                    <div>
-                      <p className="font-bold text-slate-900">
-                        Inquiry pre-populated for info@metrocleaners.co.ke!
-                      </p>
-                      <p className="text-slate-600 text-xs mt-0.5">
-                        Your default email app should open automatically. You can also re-trigger it or send instantly via WhatsApp:
-                      </p>
+              {/* Post-Submit Notification Banners */}
+              <div aria-live="polite">
+                {status === 'sent' && (
+                  <div className="mt-6 p-4 rounded-2xl bg-lime-50 border border-lime-200 text-slate-800 text-xs sm:text-sm space-y-3 animate-in fade-in duration-300">
+                    <div className="flex items-start gap-2.5">
+                      <CheckCircle className="w-5 h-5 text-lime-600 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-bold text-slate-900">
+                          Thank you, your quote request has been sent!
+                        </p>
+                        <p className="text-slate-600 text-xs mt-0.5">
+                          Our team will call you on {formData.phone || 'your number'} shortly. Need us sooner? Chat with us on WhatsApp.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={handleWhatsAppSend}
+                        className="px-3 py-1.5 bg-emerald-600 text-white font-bold rounded-lg text-xs hover:bg-emerald-700 flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <MessageSquare className="w-3.5 h-3.5" />
+                        <span>Chat on WhatsApp (+254 706 385869)</span>
+                      </button>
                     </div>
                   </div>
+                )}
 
-                  <div className="flex flex-wrap gap-2 pt-1">
-                    <a
-                      href={generatedMailto}
-                      className="px-3 py-1.5 bg-[#0047BA] text-white font-bold rounded-lg text-xs hover:bg-[#003791] flex items-center gap-1.5"
-                    >
-                      <Mail className="w-3.5 h-3.5" />
-                      <span>Re-open Email App</span>
-                    </a>
+                {(status === 'failed' || status === 'mailto') && (
+                  <div
+                    className={`mt-6 p-4 rounded-2xl border text-slate-800 text-xs sm:text-sm space-y-3 animate-in fade-in duration-300 ${
+                      status === 'failed' ? 'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-200'
+                    }`}
+                  >
+                    <div className="flex items-start gap-2.5">
+                      {status === 'failed' ? (
+                        <AlertTriangle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+                      ) : (
+                        <CheckCircle className="w-5 h-5 text-lime-600 shrink-0 mt-0.5" />
+                      )}
+                      <div>
+                        <p className="font-bold text-slate-900">
+                          {status === 'failed'
+                            ? "Sorry, we couldn't send your request."
+                            : `Inquiry pre-populated for ${COMPANY_DETAILS.email}!`}
+                        </p>
+                        <p className="text-slate-600 text-xs mt-0.5">
+                          {status === 'failed'
+                            ? `Please send it via WhatsApp or email instead, or call us on ${COMPANY_DETAILS.phoneDisplay}. Your details are already filled in.`
+                            : 'Your default email app should open automatically. You can also re-trigger it or send instantly via WhatsApp:'}
+                        </p>
+                      </div>
+                    </div>
 
-                    <button
-                      type="button"
-                      onClick={handleWhatsAppSend}
-                      className="px-3 py-1.5 bg-emerald-600 text-white font-bold rounded-lg text-xs hover:bg-emerald-700 flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <MessageSquare className="w-3.5 h-3.5" />
-                      <span>Send via WhatsApp (+254 706 385869)</span>
-                    </button>
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={handleWhatsAppSend}
+                        className="px-3 py-1.5 bg-emerald-600 text-white font-bold rounded-lg text-xs hover:bg-emerald-700 flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <MessageSquare className="w-3.5 h-3.5" />
+                        <span>Send via WhatsApp (+254 706 385869)</span>
+                      </button>
+
+                      <a
+                        href={generatedMailto}
+                        className="px-3 py-1.5 bg-[#0047BA] text-white font-bold rounded-lg text-xs hover:bg-[#003791] flex items-center gap-1.5"
+                      >
+                        <Mail className="w-3.5 h-3.5" />
+                        <span>{status === 'failed' ? 'Send via Email App' : 'Re-open Email App'}</span>
+                      </a>
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
+              </div>
 
             </div>
           </div>
